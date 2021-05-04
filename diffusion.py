@@ -7,6 +7,7 @@ def make_input_param(index_number):
     input_params = pd.read_csv("input_param.csv")
     list_element = input_params["Element"].values
     list_tempc = input_params["Temp(C)"].values
+    list_temp_sd = input_params["TempSD(C)"].values
     list_pressmpa = input_params["Press(MPa)"].values
     list_oxidebuffer = input_params["Oxide buffer"].values
     list_dx = input_params["dx(um)"].values
@@ -14,6 +15,7 @@ def make_input_param(index_number):
     list_orientation = input_params["Orientation(degree)"].values
     element = list_element[index_number]
     tempc = list_tempc[index_number]
+    temp_sd = list_temp_sd[index_number]
     pressmpa = list_pressmpa[index_number]
     oxbuffer = list_oxidebuffer[index_number]
     dx = list_dx[index_number]
@@ -21,7 +23,7 @@ def make_input_param(index_number):
     # カンマで分割し，numpy array形式に変換
     orientation = list(map(float, list_orientation[index_number].split(',')))
     orientation = np.array(orientation)
-    return element, tempc, pressmpa, oxbuffer, orientation, dx, maxtime
+    return element, tempc, temp_sd, pressmpa, oxbuffer, orientation, dx, maxtime
 
 # 組成valueを0<=value<=1で規格化
 def norm_value(value):
@@ -223,7 +225,6 @@ class ConvertTime:
         time_s = best_fit_index * self.rr
         # 小数点以下を切り捨てていることに注意
         time_yrs = round(time_s / (60 * 60 * 24 * 365))
-        print("Diffusion time is", time_yrs, "yrs.")
         return time_yrs
     # 入力値から時間ステップを計算
     def calc_nt(self, maxtime_yr):
@@ -235,7 +236,7 @@ class ConvertTime:
 
 def main():
     index_number = 0
-    element, tempc, pressmpa, oxbuffer, orientation, dx, maxtime \
+    element, md_tempc, temp_sd, pressmpa, oxbuffer, orientation, dx, maxtime \
         = make_input_param(index_number)
     print("maxtime is", maxtime)
     # 初期組成，分析値を入力
@@ -247,39 +248,55 @@ def main():
     # 数値計算のために初期組成を無次元化
     norm_initial_value = norm_value(initial_value)
     # 拡散係数を決定
-    extensive_vars = convert_units(tempc, pressmpa, oxbuffer)
-    if element == "pl-CaAlNaSi":
-        coef = SetCoef(*extensive_vars).calc_coef_plg_an()
-    elif element == "opx-FeMg":
-        coef = SetCoef(*extensive_vars).calc_coef_opx_femg(orientation)
-    elif element == "cpx-FeMg":
-        coef = SetCoef(*extensive_vars).calc_coef_cpx_femg()
-    elif element == "olv-FeMg":
-        xfe = initial_value[0]
-        coef = SetCoef(*extensive_vars).calc_coef_olv_femg(xfe, orientation)
-    else:
-        print("Not Found!")
-        pass
-    # 入力値から時間ステップを計算
-    convert_time = ConvertTime(initial_dist, coef)
-    nt = convert_time.calc_nt(maxtime)
-    # 陽的差分法による数値計算を実行し，配列に格納する
-    array_result = calc_fdm(norm_initial_value, nt)
-
-    # 測定値を最も説明する値を決定
-    best_fit_index = calc_bestfitindex(array_result, initial_dist, \
-                        measured_dist, measured_value, dx)
-    # 計算結果から無次元化した時間をもとに戻す
-    time_yrs = convert_time.restore_time(best_fit_index)
-    if nt == best_fit_index:
-        print("Input longer time!")
-    # 無次元化していた組成をもとに戻し，配列に格納
-    fit_result_value \
-    = restore_value(array_result[best_fit_index], initial_value)
-    fit_data = (initial_dist, fit_result_value)
+    lower_tempc = md_tempc - temp_sd
+    upper_tempc = md_tempc + temp_sd
+    list_tempc = np.array([lower_tempc, md_tempc, upper_tempc])
+    list_time = []
+    for tempc in list_tempc:
+        print(tempc)
+        extensive_vars = convert_units(tempc, pressmpa, oxbuffer)
+        if element == "pl-CaAlNaSi":
+            coef = SetCoef(*extensive_vars).calc_coef_plg_an()
+        elif element == "opx-FeMg":
+            coef = SetCoef(*extensive_vars).calc_coef_opx_femg(orientation)
+        elif element == "cpx-FeMg":
+            coef = SetCoef(*extensive_vars).calc_coef_cpx_femg()
+        elif element == "olv-FeMg":
+            xfe = initial_value[0]
+            coef = SetCoef(*extensive_vars).calc_coef_olv_femg(xfe, orientation)
+        else:
+            print("Not Found!")
+            pass
+        # 入力値から時間ステップを計算
+        convert_time = ConvertTime(initial_dist, coef)
+        nt = convert_time.calc_nt(maxtime)
+        # 陽的差分法による数値計算を実行し，配列に格納する
+        array_result = calc_fdm(norm_initial_value, nt)
+        # 測定値を最も説明する値を決定
+        best_fit_index = calc_bestfitindex(array_result, initial_dist, \
+                            measured_dist, measured_value, dx)
+        # 計算結果から無次元化した時間をもとに戻す
+        time_yrs = convert_time.restore_time(best_fit_index)
+        if nt == best_fit_index:
+            print("Input longer time!")
+        list_time.append(time_yrs)
+        # 無次元化していた組成をもとに戻し，配列に格納
+        if tempc == list_tempc[1]:
+            fit_result_value \
+            = restore_value(array_result[best_fit_index], initial_value)
+    
     # 図を出力
+    list_time = np.array(list_time)
+    # 温度が高いほうが時間は短くなるため
+    md_time = list_time[1]
+    lower_sd = list_time[2] - md_time
+    upper_sd = list_time[0] - md_time
+    print("Diffusion time is", md_time, \
+          "lower SD:", lower_sd, "upper SD", upper_sd, "yrs.")
+    
+    fit_data = (initial_dist, fit_result_value)
     list_plot_data = (measured_data, initial_data, fit_data)
-    make_image(*list_plot_data, tempc, time_yrs)
+    make_image(*list_plot_data, tempc, md_time)
 
 if __name__ == '__main__':
     main()

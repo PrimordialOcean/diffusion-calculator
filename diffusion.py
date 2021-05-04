@@ -253,7 +253,7 @@ def main():
     list_tempc = np.array([lower_tempc, md_tempc, upper_tempc])
     list_time = []
     for tempc in list_tempc:
-        print(tempc)
+        print("Temp C is", tempc)
         extensive_vars = convert_units(tempc, pressmpa, oxbuffer)
         if element == "pl-CaAlNaSi":
             coef = SetCoef(*extensive_vars).calc_coef_plg_an()
@@ -296,7 +296,7 @@ def main():
     
     fit_data = (initial_dist, fit_result_value)
     list_plot_data = (measured_data, initial_data, fit_data)
-    make_image(*list_plot_data, tempc, md_time)
+    make_image(*list_plot_data, md_tempc, md_time)
 
 if __name__ == '__main__':
     main()

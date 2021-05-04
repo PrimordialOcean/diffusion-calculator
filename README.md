@@ -23,7 +23,7 @@ diffusion-calculatorは (1) 多くの種類の鉱物に対応すること，(2) 
 1. `diffusion.py`を`initial_value.csv`と`measured_value.csv`, `input_param.csv`と同じディレクトリに設置します．
 1. `initial_value.csv`に初期プロファイルを，`measured_value.csv`に分析値を入力します．
 "Distance(um)"の列で0 μmの点がリムに，最終行がコア部分の組成となるようにします．
-1. `imput_param.csv`に計算する元素，温度(C)，圧力(MPa)，酸素バッファ(FQM, NNO, MHのどれか)，分析線と各結晶軸のなす角度(°)，計算時間の最大値(年)を入力します．
+1. `imput_param.csv`に計算する元素，温度(C)，温度の標準誤差(C)，圧力(MPa)，酸素バッファ(FQM, NNO, MHのどれか)，分析線と各結晶軸のなす角度(°)，計算時間の最大値(年)を入力します．
 結晶軸のなす角度は，`a軸,b軸,c軸`の順で**半角カンマ，後ろに空白はつけずに入力してください**．デフォルトではa軸に平行に分析したものとして計算が行われます．
 1. 計算する元素は現在時点で，斜長石CaAl-NaSi (`pl-CaAlNaSi`)，直方輝石Fe-Mg (`opx-FeMg`)，単斜輝石Fe-Mg (`cpx-FeMg`)，かんらん石Fe-Mg (`olv-FeMg`) が使用できます．
 引用している拡散係数についてはReferenceも参照してください．

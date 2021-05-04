@@ -1,2 +1,4 @@
-﻿Sample,Element,Temp(C),Press(MPa),Oxide buffer,alpha(degree),beta(degree),gamma(degree),dx(um),MaxTime(yr)
-1,opx,1000,200,NNO,0,90,90,1,100
+﻿Sample,Element,Temp(C),Press(MPa),Oxide buffer,Orientation(degree),dx(um),MaxTime(yr)
+0,pl-CaAlNaSi,1000,200,NNO,"0,90,90",1,50
+1,opx-FeMg,1000,200,NNO,"0,90,90",1,70
+2,olv-FeMg,1000,200,NNO,"0,90,90",1,1

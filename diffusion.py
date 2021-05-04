@@ -1,20 +1,27 @@
 import numpy as np
 import pandas as pd
+import numba
 import matplotlib.pyplot as plt
 
 def make_input_param(index_number):
     input_params = pd.read_csv("input_param.csv")
+    list_element = input_params["Element"].values
     list_tempc = input_params["Temp(C)"].values
     list_pressmpa = input_params["Press(MPa)"].values
     list_oxidebuffer = input_params["Oxide buffer"].values
     list_dx = input_params["dx(um)"].values
     list_maxtime = input_params["MaxTime(yr)"].values
+    list_orientation = input_params["Orientation(degree)"].values
+    element = list_element[index_number]
     tempc = list_tempc[index_number]
     pressmpa = list_pressmpa[index_number]
     oxbuffer = list_oxidebuffer[index_number]
     dx = list_dx[index_number]
     maxtime = list_maxtime[index_number]
-    return tempc, pressmpa, oxbuffer, dx, maxtime
+    # カンマで分割し，numpy array形式に変換
+    orientation = list(map(float, list_orientation[index_number].split(',')))
+    orientation = np.array(orientation)
+    return element, tempc, pressmpa, oxbuffer, orientation, dx, maxtime
 
 # 組成valueを0<=value<=1で規格化
 def norm_value(value):
@@ -30,6 +37,7 @@ def restore_value(normalized_value, unit_value):
 # 数値計算
 # 無次元化しているものとする
 # 陽的差分法の精度を確保するためにr=1/6に固定
+@numba.jit(nopython=True)
 def calc_fdm(norm_initial_value, nt, r=(1/6)):
     nx = len(norm_initial_value)
     u = norm_initial_value
@@ -154,14 +162,14 @@ class SetCoef():
         return coef
 
     # 直方輝石Fe-Mg (Dohmen et al., Am Mineral 2016)
-    def calc_coef_opx_femg(self):
+    def calc_coef_opx_femg(self, orientation=[0,90,90]):
         # [001]方向の拡散は[100]方向の3.5倍速いので係数を追加
         coef_c = 1.12 * (10 ** (-6)) * (self.fo2 ** 0.053) \
                  * np.exp(-308000 / (self.R_CONST*self.tempk))
         coef_a = (1 / 3.5) * coef_c
         coef_b = coef_a
         coefs = (coef_a, coef_b, coef_c)
-        coef = calc_orientation(coefs)
+        coef = calc_orientation(coefs, orientation)
         return coef
     
     # 単斜輝石Fe-Mg (Muller et al., Contrib Mineral Petrol)
@@ -171,7 +179,7 @@ class SetCoef():
         return coef
 
     # カンラン石Fe-Mg (Dohmen and Chakraborty, Phys Chem Miner 2007)
-    def calc_coef_olv_femg(self, xfe):
+    def calc_coef_olv_femg(self, xfe, orientation=[0,90,90]):
         coef_c = (10 ** (-9.21)) * ((self.fo2 / (10 ** (-7))) ** (1 / 6))\
                  * (10 ** (3 * (xfe - 0.1))) * np.exp((-201000
                  + (self.press - (10 ** 5)) * (7 * (10 ** (-6))))
@@ -180,11 +188,11 @@ class SetCoef():
         coef_a = (1 / 6) * coef_c
         coef_b = coef_a
         coefs = (coef_a, coef_b, coef_c)
-        coef = calc_orientation(coefs)
+        coef = calc_orientation(coefs, orientation)
         return coef
 
 # 結晶軸の方位の影響を計算
-def calc_orientation(coefs, orientation=[0,90,90]):
+def calc_orientation(coefs, orientation):
     coef_a, coef_b, coef_c = coefs[0], coefs[1], coefs[2]
     rads = np.deg2rad(orientation)
     alpha, beta, gamma = rads[0], rads[1], rads[2]
@@ -227,7 +235,8 @@ class ConvertTime:
 
 def main():
     index_number = 0
-    tempc, pressmpa, oxbuffer, dx, maxtime = make_input_param(index_number)
+    element, tempc, pressmpa, oxbuffer, orientation, dx, maxtime \
+        = make_input_param(index_number)
     print("maxtime is", maxtime)
     # 初期組成，分析値を入力
     # 初期組成は分析値よりコア側を同じか幅広く設定する
@@ -239,7 +248,18 @@ def main():
     norm_initial_value = norm_value(initial_value)
     # 拡散係数を決定
     extensive_vars = convert_units(tempc, pressmpa, oxbuffer)
-    coef = SetCoef(*extensive_vars).calc_coef_plg_an()
+    if element == "pl-CaAlNaSi":
+        coef = SetCoef(*extensive_vars).calc_coef_plg_an()
+    elif element == "opx-FeMg":
+        coef = SetCoef(*extensive_vars).calc_coef_opx_femg(orientation)
+    elif element == "cpx-FeMg":
+        coef = SetCoef(*extensive_vars).calc_coef_cpx_femg()
+    elif element == "olv-FeMg":
+        xfe = initial_value[0]
+        coef = SetCoef(*extensive_vars).calc_coef_olv_femg(xfe, orientation)
+    else:
+        print("Not Found!")
+        pass
     # 入力値から時間ステップを計算
     convert_time = ConvertTime(initial_dist, coef)
     nt = convert_time.calc_nt(maxtime)

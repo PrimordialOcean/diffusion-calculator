@@ -49,4 +49,5 @@ diffusion-calculatorは (1) 多くの種類の鉱物に対応すること，(2) 
 
 ## License
 Copyright (C) 2021 Motohiro Sato
+
 diffusion-calculator is released under [MIT license](https://opensource.org/licenses/mit-license.php).

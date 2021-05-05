@@ -48,4 +48,5 @@ diffusion-calculatorは (1) 多くの種類の鉱物に対応すること，(2) 
 * E-mail: msatores "at" gmail.com
 
 ## License
-diffusion-calculator is under [MIT license](https://en.wikipedia.org/wiki/MIT_License).
+Copyright (C) 2021 Motohiro Sato
+diffusion-calculator is released under [MIT license](https://opensource.org/licenses/mit-license.php).

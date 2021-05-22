@@ -54,7 +54,9 @@ def calc_fdm(norm_initial_value, nt, r=(1/6)):
         for j in range(nx):
             if j == 0:
                 # リム側はDirichlet境界条件(組成一定)を仮定
-                u_next[j] = u[j]
+                # u_next[j] = u[j]
+                # 対称境界条件
+                u_next[j] = u[j] + r * (u[j+1] - 2 * u[j] + u[j])
             elif j == nx-1:
                 # コア側は対称境界条件を仮定
                 u_next[j] = u[j] + r * (u[j] - 2 * u[j] + u[j-1])
@@ -73,30 +75,28 @@ def make_inputfile(filename):
     data = [dist, values]
     return data, dist, values
 
-# 計算値の2点間の直線 y=m*x+n のパラメータ m, n を計算する
-def calc_param(initial_dist, result_values, dx):
-    params = np.zeros([len(initial_dist)-1, 2])
-    for j in range(len(initial_dist)-1):
-        m = (result_values[j+1] - result_values[j]) / dx
-        n = result_values[j] - j * dx
-        params[j] = [m,n]
-    return params
-
-
-def calc_bestfitindex(array_result, initial_dist, measured_dist, measured_value, dx):
-    list_ssr = []
+# 最小二乗法を用いてフィッティング
+# @numba.jit(nopython=True)
+def calc_bestfitindex(array_result, initial_dist, initial_value, measured_dist, measured_value, dx):
     num_result = len(array_result)
+    list_ssr = np.zeros([num_result])
     for i in range(num_result):
-        result_values = array_result[i]
-        params = calc_param(initial_dist, result_values, dx)
+        norm_result_values = array_result[i]
+        result_values = restore_value(norm_result_values, initial_value)
+        # 線形補間してy=m*x+nの係数m, nを計算
+        params = np.zeros([int(len(initial_dist)-1), 2])
+        for j in range(len(initial_dist)-1):
+            m = (result_values[j+1] - result_values[j]) / dx
+            n = (j+1) * result_values[j] - j * result_values[j+1]
+            params[j] = [m,n]
         # 残差二乗和の変数を作成
         ssr = 0
         for j in range(len(initial_dist)-1):
             # 分析値を順番に入力
+            begin_dist, end_dist = initial_dist[j], initial_dist[j+1]
             for k in range(len(measured_dist)):
                 # もし範囲内にあれば内挿して残差二乗を計算
                 # 末尾に来た場合を想定している
-                begin_dist, end_dist = initial_dist[j], initial_dist[j+1]
                 cf_meas_dist = measured_dist[k]
                 if (begin_dist <= cf_meas_dist < end_dist ) \
                 or (cf_meas_dist == end_dist):
@@ -104,17 +104,19 @@ def calc_bestfitindex(array_result, initial_dist, measured_dist, measured_value,
                     ssr += (lerp_result_value - measured_value[k]) ** 2
                 else:
                     pass
-        list_ssr.append(ssr)
+        list_ssr[i] = ssr
+        
     # 測定値を最も説明する値を決定
-    best_fit_index = list_ssr.index(min(list_ssr))
+    best_fit_index = np.argmin(list_ssr)
+    print(best_fit_index)
     return best_fit_index
 
-# プロット
-def make_image(measured_data, initial_data, fit_data, tempc, time_yrs):
+# 計算結果のプロット
+def make_image(measured_data, initial_data, fit_data, tempc, time_days):
     fig = plt.figure()
     plt.rcParams["font.size"] = 16
     ax = fig.add_subplot(111)
-    ax.set_title(str(time_yrs)+" yr in " + str(tempc) + "$^\circ$C")
+    ax.set_title(str(time_days)+" days in " + str(tempc) + "$^\circ$C")
     ax.plot(*measured_data, "o", color="w", mec="k", label="Measured")
     ax.plot(*initial_data, "--", color="k", label="Initial")
     ax.plot(*fit_data, "-", color="r", label="Best fit")
@@ -123,24 +125,17 @@ def make_image(measured_data, initial_data, fit_data, tempc, time_yrs):
     fig.legend(loc=2, fancybox=False, framealpha=1, edgecolor="k", fontsize=14)
     fig.savefig('img.jpg', dpi=300, bbox_inches='tight')
 
-# fO2計算クラス
-class CalcOxBuffer():
-    def __init__(self, tempk, press, oxbuffer):
-        # 示強変数を格納
-        self.tempk = tempk
-        self.pressbar = press * 10 ** (-5)
-        self.oxbuffer = oxbuffer
-        # ref Frost (1991) Rev Mineral Geochem
-        self.COEFS = {"FMQ": (-25096.3, 8.735, 0.110),
-                      "NNO": (-24930, 9.36, 0.046),
-                      "MH": (-25700.6, 14.558, 0.019)}
-    # calc fO2 buffer
-    def calc_fo2(self, ):
-        coefs = self.COEFS[self.oxbuffer]
-        log_fo2 = (coefs[0] / self.tempk) + coefs[1] \
-                  + coefs[2] * (self.pressbar-1) / self.tempk
-        # print("fO2: 10^", log_fo2)
-        return 10 ** log_fo2
+# fO2計算
+def calc_fo2(tempk, press, oxbuffer):
+    list_coefs = {"FMQ": (-25096.3, 8.735, 0.110), "NNO": (-24930, 9.36, 0.046),
+             "MH": (-25700.6, 14.558, 0.019)}
+    pressbar = press * 10 ** (-5)
+    coefs = list_coefs[oxbuffer]
+    a, b, c = coefs[0], coefs[1], coefs[2]
+    log_fo2 = (a / tempk) + b + c * (pressbar - 1) / tempk
+    # print("fO2: 10^", log_fo2)
+    return 10 ** log_fo2
+
 
 # 拡散係数クラス
 class SetCoef():
@@ -148,7 +143,8 @@ class SetCoef():
     def __init__(self, tempk, press, oxbuffer):
         self.tempk = tempk
         self.press = press
-        self.fo2 = CalcOxBuffer(self.tempk, self.press, oxbuffer).calc_fo2()
+        # self.fo2 = CalcOxBuffer(self.tempk, self.press, oxbuffer).calc_fo2()
+        self.fo2 = calc_fo2(tempk, press, oxbuffer)
         self.R_CONST = 8.31
 
     # 斜長石CaAl-NaSi (Liu and Yund, Am Mineral 1992)
@@ -224,8 +220,8 @@ class ConvertTime:
     def restore_time(self, best_fit_index):
         time_s = best_fit_index * self.rr
         # 小数点以下を切り捨てていることに注意
-        time_yrs = round(time_s / (60 * 60 * 24 * 365))
-        return time_yrs
+        time_days = int(time_s / (60 * 60 * 24))
+        return time_days
     # 入力値から時間ステップを計算
     def calc_nt(self, maxtime_yr):
         maxtime_sec = 60 * 60 * 24 * 365 * maxtime_yr
@@ -234,13 +230,42 @@ class ConvertTime:
         print("Time step is",nt)
         return nt
 
+def select_coef(element, orientation, *extensive_vars):
+    set_coef = SetCoef(*extensive_vars)
+    if element == "pl-CaAlNaSi":
+        coef = set_coef.calc_coef_plg_an()
+    elif element == "opx-FeMg":
+        coef = set_coef.calc_coef_opx_femg(orientation)
+    elif element == "cpx-FeMg":
+        coef = set_coef.calc_coef_cpx_femg()
+    elif element == "olv-FeMg":
+        xfe = initial_value[0]
+        coef = set_coef.calc_coef_olv_femg(xfe, orientation)
+    else:
+        print("Not Found!")
+        pass
+    return coef
+
+def make_three_temp(md_tempc, temp_sd):
+    lower_tempc = md_tempc - temp_sd
+    upper_tempc = md_tempc + temp_sd
+    list_tempc = np.array([lower_tempc, md_tempc, upper_tempc])
+    return list_tempc
+
+def print_time(list_time):
+    md_time = list_time[1]
+    lower_sd = list_time[2] - md_time
+    upper_sd = list_time[0] - md_time
+    print("Diffusion time is", md_time, \
+          "lower SD:", lower_sd, "upper SD", upper_sd, "days.")
+    return md_time
+
 def main():
     index_number = 0
     element, md_tempc, temp_sd, pressmpa, oxbuffer, orientation, dx, maxtime \
         = make_input_param(index_number)
-    print("maxtime is", maxtime)
+    print("maxtime is", maxtime, "yrs")
     # 初期組成，分析値を入力
-    # 初期組成は分析値よりコア側を同じか幅広く設定する
     initial_data, initial_dist, initial_value \
         = make_inputfile("initial_value.csv")
     measured_data, measured_dist, measured_value \
@@ -248,53 +273,39 @@ def main():
     # 数値計算のために初期組成を無次元化
     norm_initial_value = norm_value(initial_value)
     # 拡散係数を決定
-    lower_tempc = md_tempc - temp_sd
-    upper_tempc = md_tempc + temp_sd
-    list_tempc = np.array([lower_tempc, md_tempc, upper_tempc])
-    list_time = []
-    for tempc in list_tempc:
-        print("Temp C is", tempc)
+    list_tempc = make_three_temp(md_tempc, temp_sd)
+    list_coef = np.zeros(3)
+    for i, tempc in enumerate(list_tempc):
         extensive_vars = convert_units(tempc, pressmpa, oxbuffer)
-        if element == "pl-CaAlNaSi":
-            coef = SetCoef(*extensive_vars).calc_coef_plg_an()
-        elif element == "opx-FeMg":
-            coef = SetCoef(*extensive_vars).calc_coef_opx_femg(orientation)
-        elif element == "cpx-FeMg":
-            coef = SetCoef(*extensive_vars).calc_coef_cpx_femg()
-        elif element == "olv-FeMg":
-            xfe = initial_value[0]
-            coef = SetCoef(*extensive_vars).calc_coef_olv_femg(xfe, orientation)
-        else:
-            print("Not Found!")
-            pass
+        coef = select_coef(element, orientation, *extensive_vars)
+        list_coef[i] = coef
+    # 拡散係数の最小値，平均値，最大値について計算
+    # list_time = np.zeros(3)
+    list_time = []
+    for i, coef in enumerate(list_coef):
         # 入力値から時間ステップを計算
         convert_time = ConvertTime(initial_dist, coef)
         nt = convert_time.calc_nt(maxtime)
-        # 陽的差分法による数値計算を実行し，配列に格納する
+        # 陽的差分法による数値計算を実行し，配列に格納
         array_result = calc_fdm(norm_initial_value, nt)
         # 測定値を最も説明する値を決定
-        best_fit_index = calc_bestfitindex(array_result, initial_dist, \
+        # ここで無次元化をもとに戻さないとだめ
+        best_fit_index = calc_bestfitindex(array_result, initial_dist, initial_value, \
                             measured_dist, measured_value, dx)
         # 計算結果から無次元化した時間をもとに戻す
-        time_yrs = convert_time.restore_time(best_fit_index)
+        time_days = convert_time.restore_time(best_fit_index)
+        print(time_days)
         if nt == best_fit_index:
             print("Input longer time!")
-        list_time.append(time_yrs)
+        list_time.append(time_days)
         # 無次元化していた組成をもとに戻し，配列に格納
-        if tempc == list_tempc[1]:
+        if i == 1:
             fit_result_value \
             = restore_value(array_result[best_fit_index], initial_value)
-    
+            fit_data = (initial_dist, fit_result_value)
     # 図を出力
-    list_time = np.array(list_time)
     # 温度が高いほうが時間は短くなるため
-    md_time = list_time[1]
-    lower_sd = list_time[2] - md_time
-    upper_sd = list_time[0] - md_time
-    print("Diffusion time is", md_time, \
-          "lower SD:", lower_sd, "upper SD", upper_sd, "yrs.")
-    
-    fit_data = (initial_dist, fit_result_value)
+    md_time = print_time(list_time)
     list_plot_data = (measured_data, initial_data, fit_data)
     make_image(*list_plot_data, md_tempc, md_time)
 

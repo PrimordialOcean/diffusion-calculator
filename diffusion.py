@@ -5,25 +5,29 @@ import matplotlib.pyplot as plt
 
 def make_input_param(index_number):
     input_params = pd.read_csv("input_param.csv")
-    list_element = input_params["Element"].values
-    list_tempc = input_params["Temp(C)"].values
-    list_temp_sd = input_params["TempSD(C)"].values
-    list_pressmpa = input_params["Press(MPa)"].values
-    list_oxidebuffer = input_params["Oxide buffer"].values
-    list_dx = input_params["dx(um)"].values
-    list_maxtime = input_params["MaxTime(yr)"].values
-    list_orientation = input_params["Orientation(degree)"].values
+    list_element = input_params["element"].values
+    list_tempc = input_params["temp_c"].values
+    list_temp_sd = input_params["sd_temp_c"].values
+    list_pressmpa = input_params["press_mpa"].values
+    list_oxidebuffer = input_params["oxbuffer"].values
+    list_dlogfo2 = input_params["dlogfo2"].values
+    list_dlogfo2_sd = input_params["sd_dlogfo2"].values
+    list_dx = input_params["dx_um"].values
+    list_maxtime = input_params["max_time_yr"].values
+    list_orientation = input_params["orientation_degree"].values
     element = list_element[index_number]
     tempc = list_tempc[index_number]
     temp_sd = list_temp_sd[index_number]
     pressmpa = list_pressmpa[index_number]
     oxbuffer = list_oxidebuffer[index_number]
+    dlogfo2 = list_dlogfo2[index_number]
+    dlogfo2_sd = list_dlogfo2_sd[index_number]
     dx = list_dx[index_number]
     maxtime = list_maxtime[index_number]
     # カンマで分割し，numpy array形式に変換
     orientation = list(map(float, list_orientation[index_number].split(',')))
     orientation = np.array(orientation)
-    return element, tempc, temp_sd, pressmpa, oxbuffer, orientation, dx, maxtime
+    return element, tempc, temp_sd, pressmpa, oxbuffer, dlogfo2, dlogfo2_sd, orientation, dx, maxtime
 
 # 組成valueを0<=value<=1で規格化
 def norm_value(value):
@@ -120,26 +124,40 @@ def make_image(measured_data, initial_data, fit_data, tempc, time_days):
     fig.legend(loc=2, fancybox=False, framealpha=1, edgecolor="k", fontsize=14)
     fig.savefig('img.jpg', dpi=300, bbox_inches='tight')
 
-# fO2計算
 def calc_fo2(tempk, press, oxbuffer):
     list_coefs = {"FMQ": (-25096.3, 8.735, 0.110), "NNO": (-24930, 9.36, 0.046),
              "MH": (-25700.6, 14.558, 0.019)}
     pressbar = press * 10 ** (-5)
     coefs = list_coefs[oxbuffer]
     a, b, c = coefs[0], coefs[1], coefs[2]
-    log_fo2 = (a / tempk) + b + c * (pressbar - 1) / tempk
-    print("fO2: 10^", log_fo2)
-    return 10 ** log_fo2
+    logfo2 = (a / tempk) + b + c * (pressbar - 1) / tempk
+    # print("fO2: 10^", logfo2)
+    return 10 ** logfo2
 
+def select_coef(element, orientation, *extensive_vars):
+    set_coef = SetCoef(*extensive_vars)
+    if element == "pl-CaAlNaSi":
+        coef = set_coef.calc_coef_plg_an()
+    elif element == "opx-FeMg":
+        coef = set_coef.calc_coef_opx_femg(orientation)
+    elif element == "cpx-FeMg":
+        coef = set_coef.calc_coef_cpx_femg()
+    elif element == "olv-FeMg":
+        xfe = initial_value[0]
+        coef = set_coef.calc_coef_olv_femg(xfe, orientation)
+    else:
+        print("Not Found!")
+        pass
+    return coef
 
 # 拡散係数クラス
 class SetCoef():
     # 初期化メソッド
-    def __init__(self, tempk, press, oxbuffer):
+    def __init__(self, tempk, press, fo2):
         self.tempk = tempk
         self.press = press
         # self.fo2 = CalcOxBuffer(self.tempk, self.press, oxbuffer).calc_fo2()
-        self.fo2 = calc_fo2(tempk, press, oxbuffer)
+        self.fo2 = fo2
         self.R_CONST = 8.31
 
     # 斜長石CaAl-NaSi (Liu and Yund, Am Mineral 1992)
@@ -193,13 +211,6 @@ def calc_orientation(coefs, orientation):
            + coef_c * (np.cos(gamma) ** 2)
     return coef
 
-# 単位換算
-def convert_units(tempc, pressmpa, oxbuffer):
-    tempk = tempc + 273.15
-    press = pressmpa * (10 ** 6)
-    extensive_vars = (tempk, press, oxbuffer)
-    return extensive_vars
-
 # 計算結果から無次元化した時間をもとに戻す
 # dt'/dx'^2 = 1/6, t = τ*t' = τ*nt*dt', x = xmax*x' (∵ 0<=x'max<=1)
 # D*τ/xmax^2 = 1より，τ = xmax^2/D, またdt' = dx'^2/6
@@ -225,28 +236,6 @@ class ConvertTime:
         print("Time step is",nt)
         return nt
 
-def select_coef(element, orientation, *extensive_vars):
-    set_coef = SetCoef(*extensive_vars)
-    if element == "pl-CaAlNaSi":
-        coef = set_coef.calc_coef_plg_an()
-    elif element == "opx-FeMg":
-        coef = set_coef.calc_coef_opx_femg(orientation)
-    elif element == "cpx-FeMg":
-        coef = set_coef.calc_coef_cpx_femg()
-    elif element == "olv-FeMg":
-        xfe = initial_value[0]
-        coef = set_coef.calc_coef_olv_femg(xfe, orientation)
-    else:
-        print("Not Found!")
-        pass
-    return coef
-
-def make_three_temp(md_tempc, temp_sd):
-    lower_tempc = md_tempc - temp_sd
-    upper_tempc = md_tempc + temp_sd
-    list_tempc = np.array([lower_tempc, md_tempc, upper_tempc])
-    return list_tempc
-
 def print_time(list_time):
     md_time = list_time[1]
     lower_sd = list_time[2] - md_time
@@ -255,10 +244,46 @@ def print_time(list_time):
           "lower SD:", lower_sd, "upper SD", upper_sd, "days.")
     return md_time
 
+def make_three_coef(element, orientation, tempc, temp_sd, pressmpa, oxbuffer, dlogfo2, dlogfo2_sd):
+    # fO2計算
+    def calc_logfo2(tempk, press, oxbuffer, dlogfo2):
+        list_coefs = {"FMQ": (-25096.3, 8.735, 0.110), "NNO": (-24930, 9.36, 0.046),
+                "MH": (-25700.6, 14.558, 0.019)}
+        pressbar = press * 10 ** (-5)
+        coefs = list_coefs[oxbuffer]
+        a, b, c = coefs[0], coefs[1], coefs[2]
+        logfo2 = (a / tempk) + b + c * (pressbar - 1) / tempk
+        logfo2 = logfo2 + dlogfo2
+        return logfo2
+    # 単位換算
+    tempk = tempc + 273.15
+    press = pressmpa * (10 ** 6)
+    # 温度範囲の計算
+    min_tempk = tempk - temp_sd
+    md_tempk = tempk
+    max_tempk = tempk + temp_sd
+    # 酸素フガシティ範囲の計算
+    min_logfo2 = calc_logfo2(min_tempk, press, oxbuffer, dlogfo2) - dlogfo2_sd
+    md_logfo2 = calc_logfo2(md_tempk, press, oxbuffer, dlogfo2)
+    max_logfo2 = calc_logfo2(max_tempk, press, oxbuffer, dlogfo2) + dlogfo2_sd
+    min_fo2 = 10 ** min_logfo2
+    md_fo2 = 10 ** md_logfo2
+    max_fo2 = 10 ** max_logfo2
+    # 示強変数を格納する
+    min_extensive_vars = [min_tempk, press, min_fo2]
+    md_extensive_vars = [md_tempk, press, md_fo2]
+    max_extensive_vars = [max_tempk, press, max_fo2]
+    # 拡散係数の計算
+    min_coef = select_coef(element, orientation, *min_extensive_vars)
+    md_coef = select_coef(element, orientation, *md_extensive_vars)
+    max_coef = select_coef(element, orientation, *max_extensive_vars)
+    list_coef = [min_coef, md_coef, max_coef]
+    return list_coef
+
 def main():
     index_number = 0
-    element, md_tempc, temp_sd, pressmpa, oxbuffer, orientation, dx, maxtime \
-        = make_input_param(index_number)
+    element, tempc, temp_sd, pressmpa, oxbuffer, dlogfo2, dlogfo2_sd, \
+    orientation, dx, maxtime = make_input_param(index_number)
     print("maxtime is", maxtime, "yrs")
     # 初期組成，分析値を入力
     initial_data, initial_dist, initial_value \
@@ -268,12 +293,8 @@ def main():
     # 数値計算のために初期組成を無次元化
     norm_initial_value = norm_value(initial_value)
     # 拡散係数を決定
-    list_tempc = make_three_temp(md_tempc, temp_sd)
-    list_coef = np.zeros(3)
-    for i, tempc in enumerate(list_tempc):
-        extensive_vars = convert_units(tempc, pressmpa, oxbuffer)
-        coef = select_coef(element, orientation, *extensive_vars)
-        list_coef[i] = coef
+    list_coef \
+    = make_three_coef(element, orientation, tempc, temp_sd, pressmpa, oxbuffer, dlogfo2, dlogfo2_sd)
     print("Diffusion coefficient (m/s^2)",list_coef[1])
     # 拡散係数の最小値，平均値，最大値について計算
     list_time = []
@@ -299,7 +320,17 @@ def main():
     # 温度が高いほうが時間は短くなるため
     md_time = print_time(list_time)
     list_plot_data = (measured_data, initial_data, fit_data)
-    make_image(*list_plot_data, md_tempc, md_time)
+    make_image(*list_plot_data, tempc, md_time)
+
+    # 計算結果を保存
+    results = pd.DataFrame({"min_t_day": [list_time[2]],
+                            "md_t_day": [list_time[1]],
+                            "max_t_day": [list_time[0]],
+                            "temp_c": [tempc],
+                            "min_dcoef": [list_coef[0]],
+                            "md_dcoef": [list_coef[1]],
+                            "mas_dcoef": [list_coef[2]]})
+    results.to_csv("result.csv")
 
 if __name__ == '__main__':
     main()

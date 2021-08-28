@@ -75,41 +75,36 @@ def make_inputfile(filename):
     data = [dist, values]
     return data, dist, values
 
-# 最小二乗法を用いてフィッティング
-# @numba.jit(nopython=True)
-def calc_bestfitindex(array_result, initial_dist, initial_value, measured_dist, measured_value, dx):
-    num_result = len(array_result)
-    list_ssr = np.zeros([num_result])
-    for i in range(num_result):
-        norm_result_values = array_result[i]
-        result_values = restore_value(norm_result_values, initial_value)
-        # 線形補間してy=m*x+nの係数m, nを計算
-        params = np.zeros([int(len(initial_dist)-1), 2])
-        for j in range(len(initial_dist)-1):
-            m = (result_values[j+1] - result_values[j]) / dx
-            n = (j+1) * result_values[j] - j * result_values[j+1]
-            params[j] = [m,n]
-        # 残差二乗和の変数を作成
-        ssr = 0
-        for j in range(len(initial_dist)-1):
-            # 分析値を順番に入力
-            begin_dist, end_dist = initial_dist[j], initial_dist[j+1]
-            for k in range(len(measured_dist)):
-                # もし範囲内にあれば内挿して残差二乗を計算
-                # 末尾に来た場合を想定している
-                cf_meas_dist = measured_dist[k]
-                if (begin_dist <= cf_meas_dist < end_dist ) \
-                or (cf_meas_dist == end_dist):
-                    lerp_result_value = params[j,0] * cf_meas_dist + params[j,1]
-                    ssr += (lerp_result_value - measured_value[k]) ** 2
+def calc_bestfitindex(initial_dist, array_result, measured_data):
+    measured_dist, measured_value = measured_data[0], measured_data[1]
+    # 分析値を線形補間する
+    params = np.zeros([int(len(measured_dist)-1), 2])
+    for i in range(len(measured_dist)-1):
+        m = (measured_value[i+1] - measured_value[i]) \
+            / (measured_dist[i+1] - measured_dist[i])
+        n = measured_value[i] - m * measured_dist[i]
+        params[i] = [m, n]
+    # 計算値とフィッティング
+    list_ssr = np.zeros([len(array_result)])
+    for i, ssr in enumerate(list_ssr):
+        result_value = array_result[i]
+        for j in range(len(measured_dist)-1):
+            m, n = params[j, 0], params[j, 1]
+            begin_dist, end_dist = measured_dist[j], measured_dist[j+1]
+            for k in range(len(initial_dist)):
+                result_dist = initial_dist[k]
+                if (begin_dist <= result_dist < end_dist) \
+                or (result_dist == end_dist):
+                    lerp_measured_value = m * result_dist + n
+                    ssr += (lerp_measured_value - result_value[k]) ** 2
                 else:
                     pass
         list_ssr[i] = ssr
-        
-    # 測定値を最も説明する値を決定
+    # 残差二乗和の最小値を選ぶ
     best_fit_index = np.argmin(list_ssr)
     print(best_fit_index)
     return best_fit_index
+
 
 # 計算結果のプロット
 def make_image(measured_data, initial_data, fit_data, tempc, time_days):
@@ -117,7 +112,7 @@ def make_image(measured_data, initial_data, fit_data, tempc, time_days):
     plt.rcParams["font.size"] = 16
     ax = fig.add_subplot(111)
     ax.set_title(str(time_days)+" days in " + str(tempc) + "$^\circ$C")
-    ax.plot(*measured_data, "o", color="w", mec="k", label="Measured")
+    ax.plot(*measured_data, "o", color="w", mec="gray", label="Measured")
     ax.plot(*initial_data, "--", color="k", label="Initial")
     ax.plot(*fit_data, "-", color="r", label="Best fit")
     ax.set_xlabel("Distance (\u03bcm)", fontsize=18)
@@ -133,7 +128,7 @@ def calc_fo2(tempk, press, oxbuffer):
     coefs = list_coefs[oxbuffer]
     a, b, c = coefs[0], coefs[1], coefs[2]
     log_fo2 = (a / tempk) + b + c * (pressbar - 1) / tempk
-    # print("fO2: 10^", log_fo2)
+    print("fO2: 10^", log_fo2)
     return 10 ** log_fo2
 
 
@@ -279,29 +274,26 @@ def main():
         extensive_vars = convert_units(tempc, pressmpa, oxbuffer)
         coef = select_coef(element, orientation, *extensive_vars)
         list_coef[i] = coef
+    print("Diffusion coefficient (m/s^2)",list_coef[1])
     # 拡散係数の最小値，平均値，最大値について計算
-    # list_time = np.zeros(3)
     list_time = []
     for i, coef in enumerate(list_coef):
         # 入力値から時間ステップを計算
         convert_time = ConvertTime(initial_dist, coef)
         nt = convert_time.calc_nt(maxtime)
         # 陽的差分法による数値計算を実行し，配列に格納
-        array_result = calc_fdm(norm_initial_value, nt)
+        norm_array_result = calc_fdm(norm_initial_value, nt)
+        array_result = restore_value(norm_array_result, initial_value)
         # 測定値を最も説明する値を決定
-        # ここで無次元化をもとに戻さないとだめ
-        best_fit_index = calc_bestfitindex(array_result, initial_dist, initial_value, \
-                            measured_dist, measured_value, dx)
+        best_fit_index = calc_bestfitindex(initial_dist, array_result, measured_data)
         # 計算結果から無次元化した時間をもとに戻す
         time_days = convert_time.restore_time(best_fit_index)
-        print(time_days)
         if nt == best_fit_index:
             print("Input longer time!")
         list_time.append(time_days)
         # 無次元化していた組成をもとに戻し，配列に格納
         if i == 1:
-            fit_result_value \
-            = restore_value(array_result[best_fit_index], initial_value)
+            fit_result_value = array_result[best_fit_index]
             fit_data = (initial_dist, fit_result_value)
     # 図を出力
     # 温度が高いほうが時間は短くなるため
